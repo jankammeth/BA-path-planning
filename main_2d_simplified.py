@@ -1,0 +1,139 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import time
+from scp_wow_2d_fixed import SCPCraft2DTrajectory
+
+def main():
+    """
+    Improved main function with better performance.
+    """
+    print("------ WOW Fleet Collision-Free 2D Trajectory Generation ------")
+    
+    # Configuration parameters - more conservative parameters
+    n_vehicles = 5
+    time_horizon = 4.0          # [s] - longer time horizon for easier paths
+    time_step = 0.1             # [s]
+    min_distance = 0.1          # [m]
+    safety_margin = 0.3         # [m] - increased safety margin
+    space_dims = [10, 10]       # [m]
+    
+    print(f"Configuration:")
+    print(f"  Number of vehicles: {n_vehicles}")
+    print(f"  Time horizon: {time_horizon} s")
+    print(f"  Time step: {time_step} s")
+    print(f"  Minimum distance: {min_distance} m")
+    print(f"  Safety margin: {safety_margin} m")
+    print(f"  Space dimensions: {space_dims} m")
+    print()
+    
+    # Create the trajectory planner
+    planner = SCPCraft2DTrajectory(
+        n_vehicles=n_vehicles,
+        time_horizon=time_horizon,
+        time_step=time_step,
+        min_distance=min_distance,
+        safety_margin=safety_margin,
+        space_dims=space_dims
+    )
+    
+    # Initial positions in a more spread out pattern
+    initial_positions = np.array([
+        [2.0, 2.0],    # bottom left
+        [8.0, 2.0],    # bottom right
+        [5.0, 5.0],    # center
+        [2.0, 8.0],    # top left
+        [8.0, 8.0],    # top right
+    ])
+    
+    # Final positions - swapped configuration
+    final_positions = np.array([
+        [8.0, 8.0],    # bottom left -> top right
+        [2.0, 8.0],    # bottom right -> top left
+        [5.0, 2.0],    # center -> bottom center
+        [8.0, 2.0],    # top left -> bottom right
+        [2.0, 2.0],    # top right -> bottom left
+    ])
+    
+    # Set initial & final states
+    planner.set_initial_states(initial_positions)
+    planner.set_final_states(final_positions)
+    
+    # Generate the trajectories
+    print("Generating trajectories...")
+    start_time = time.time()
+    try:
+        trajectories = planner.generate_trajectories(max_iterations=15)
+        end_time = time.time()
+        
+        # Display results
+        print("\nTrajectory generation complete!")
+        print(f"Total computation time: {end_time - start_time:.3f} seconds")
+        print(f"Number of time steps: {planner.K}")
+        print(f"Total trajectory duration: {planner.T} seconds")
+        
+        # Visualize the trajectories
+        print("\nVisualizing 2D trajectories...")
+        planner.visualize_trajectories(show_animation=True, save_path="wow_trajectories_2d.png")
+        
+        # Visualize time snapshots
+        print("\nVisualizing time snapshots")
+        planner.visualize_time_snapshots(num_snapshots=5, save_path="wow_trajectories_snapshots.png")
+        
+        print("\nTrajectory files saved as:")
+        print("- wow_trajectories_2d.png")
+        print("- wow_trajectories_snapshots.png")
+    
+    except Exception as e:
+        print(f"Error during trajectory generation: {e}")
+        print("Trying simple scenario with fewer vehicles...")
+        test_simple_crossing()
+
+def test_simple_crossing():
+    """A simple test with just 2 vehicles to ensure the code works."""
+    print("------ Testing Simple Crossing Scenario ------")
+    
+    # Create planner for 2 vehicles with conservative parameters
+    planner = SCPCraft2DTrajectory(
+        n_vehicles=2,
+        time_horizon=5.0,      # Longer time
+        time_step=0.1,
+        min_distance=1.0,
+        safety_margin=0.5,     # Much larger safety margin
+        space_dims=[10, 10]
+    )
+    
+    # Initial positions - vehicles with offset to avoid direct crossing
+    initial_positions = np.array([
+        [2.0, 3.0],  # bottom left
+        [8.0, 7.0],  # top right
+    ])
+    
+    # Final positions - vehicles need to exchange positions
+    final_positions = np.array([
+        [8.0, 7.0],  # bottom left -> top right
+        [2.0, 3.0],  # top right -> bottom left
+    ])
+    
+    # Set states
+    planner.set_initial_states(initial_positions)
+    planner.set_final_states(final_positions)
+    
+    # Generate trajectories
+    print("Generating trajectories for simple crossing scenario...")
+    start_time = time.time()
+    try:
+        trajectories = planner.generate_trajectories(max_iterations=10)
+        end_time = time.time()
+        
+        print(f"Computation time: {end_time - start_time:.3f} seconds")
+        
+        # Visualize
+        planner.visualize_trajectories(show_animation=True, save_path="simple_crossing.png")
+        planner.visualize_time_snapshots(num_snapshots=6, save_path="simple_crossing_snapshots.png")
+        
+        print("\nSimple scenario completed successfully!")
+    except Exception as e:
+        print(f"Error even with simple scenario: {e}")
+
+if __name__ == "__main__":
+    main()

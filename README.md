@@ -1,1 +1,1 @@
-# BA-path-planning
+# Bachleor Thesis: path-planning
