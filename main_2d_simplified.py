@@ -2,6 +2,8 @@ import numpy as np
 import matplotlib.pyplot as plt
 import time
 from scp_wow_2d_fixed import SCPCraft2DTrajectory
+from test import SCPOSQPTrajectory
+from scp import SCP
 
 def main():
     """
@@ -11,28 +13,25 @@ def main():
     
     # Configuration parameters - more conservative parameters
     n_vehicles = 5
-    time_horizon = 4.0          # [s] - longer time horizon for easier paths
+    time_horizon = 4.0          # [s]
     time_step = 0.1             # [s]
-    min_distance = 0.1          # [m]
-    safety_margin = 0.3         # [m] - increased safety margin
-    space_dims = [10, 10]       # [m]
+    min_distance = 0.3          # [m]
+    space_dims = [0,0,10, 10]   # [m]
     
     print(f"Configuration:")
     print(f"  Number of vehicles: {n_vehicles}")
     print(f"  Time horizon: {time_horizon} s")
     print(f"  Time step: {time_step} s")
-    print(f"  Minimum distance: {min_distance} m")
-    print(f"  Safety margin: {safety_margin} m")
+    print(f"  Minimum margin: {min_distance} m")
     print(f"  Space dimensions: {space_dims} m")
     print()
     
     # Create the trajectory planner
-    planner = SCPCraft2DTrajectory(
+    planner = SCP(
         n_vehicles=n_vehicles,
         time_horizon=time_horizon,
         time_step=time_step,
         min_distance=min_distance,
-        safety_margin=safety_margin,
         space_dims=space_dims
     )
     
@@ -93,13 +92,12 @@ def test_simple_crossing():
     print("------ Testing Simple Crossing Scenario ------")
     
     # Create planner for 2 vehicles with conservative parameters
-    planner = SCPCraft2DTrajectory(
+    planner = SCP(
         n_vehicles=2,
         time_horizon=5.0,      # Longer time
         time_step=0.1,
         min_distance=1.0,
-        safety_margin=0.5,     # Much larger safety margin
-        space_dims=[10, 10]
+        space_dims=[0,0,10, 10]
     )
     
     # Initial positions - vehicles with offset to avoid direct crossing

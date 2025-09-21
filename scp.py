@@ -2,6 +2,8 @@ import numpy as np
 import scipy.sparse as sp
 import osqp
 import time
+import matplotlib.pyplot as plt
+from matplotlib.patches import Circle
 
 def _jerk_matrix_sparse(N, K, h):
     """(2N(K-1)) x (2NK) first-difference operator per vehicle/axis, scaled by 1/h."""
@@ -76,24 +78,31 @@ class SCP():
         self.T = time_horizon
         self.h = time_step
         self.K = int(self.T / self.h) + 1
-        self.R_margin = min_distance
+        self.R = min_distance
         self.space_dims = space_dims
 
         # Initialization: Equality constraints and solution
-        self.initial_positions = None
-        self.final_states = None
         self.trajectories = None
+
+        self.initial_positions = None
+        self.initial_velocities = None
+        self.initial_accelerations = None
+        self.final_positions = None
+        self.final_velocities = None
+        self.final_accelerations = None
 
         # Initialization: Inequality Contraints
         self.pos_min = np.array([space_dims[0], space_dims[1]])
         self.pos_max = np.array([space_dims[2], space_dims[3]])
 
-        #NOTE: vel, accel margins?
-        self.vel_min = -0.75
-        self.vel_max = 0.75
+        # Velocity and acceleration limits with margins for solver stability
+        self.vel_min = -3.0
+        self.vel_max = 3.0
+        self.vel_margin = 0.002
 
-        self.acc_min = -15.0
-        self.acc_max = 15.0
+        self.acc_min = -105.0
+        self.acc_max = 105.0
+        self.acc_margin = 0.02
 
         self.jerk_min = -15
         self.jerk_max = 15
@@ -130,9 +139,8 @@ class SCP():
         print(f"Minimum distance between vehicles: {self.R}")
         print(f"Space dimensions: {self.space_dims}")
 
-    #NOTE: ev. flatten array
     def set_initial_states(self, positions, velocities=None, accelerations=None):
-        """Set initial states for all vehicles."""
+        """Set initial states for all vehicles in (N, 2) format."""
         if positions.shape != (self.N, 2):
             raise ValueError(f"Positions must be shape ({self.N}, 2)")
             
@@ -141,34 +149,63 @@ class SCP():
         if accelerations is None:
             accelerations = np.zeros((self.N, 2))
             
-        self.initial_states = {
-            'positions': positions,
-            'velocities': velocities,
-            'accelerations': accelerations
+        # Also convert into flattened arrays
+        self.initial_positions = positions.flatten()
+        self.initial_velocities = velocities.flatten()
+        self.initial_accelerations = accelerations.flatten()
+
+        assert len(self.initial_positions) == len(self.initial_velocities) == len(self.initial_accelerations)
+        
+    def set_final_states(self, positions, velocities=None, accelerations=None):
+        """Set final states for all vehicles in (N, 2) format."""
+        if positions.shape != (self.N, 2):
+            raise ValueError(f"Positions must be shape ({self.N}, 2)")
+            
+        if velocities is None:
+            velocities = np.zeros((self.N, 2))
+        if accelerations is None:
+            accelerations = np.zeros((self.N, 2))
+            
+        # Also convert into flattened arrays
+        self.final_positions = positions.flatten()
+        self.final_velocities = velocities.flatten()
+        self.final_accelerations = accelerations.flatten()
+
+        assert len(self.final_positions) == len(self.final_velocities) == len(self.final_accelerations)
+
+    def generate_trajectories(self, max_iterations=15, convergence_threshold=1e-3):
+        """Main method to generate collision-free trajectories using SCP."""
+        start_time = time.time()
+
+        self.precompute_optimization_matrices()
+        accelerations = self._solve_initial_trajectory()
+
+
+
+        positions, velocities = self._compute_positions_velocities(accelerations)
+
+        self.trajectories = {
+            'positions': positions,  # Shape (N, K, 2)
+            'velocities': velocities,  # Shape (N, K, 2)
+            'accelerations': accelerations  # Shape (N, K, 2)
         }
 
-    #NOTE: ev. flatten array
-    def set_final_states(self, positions, velocities=None, accelerations=None):
-        """Set final states for all vehicles."""
-        if positions.shape != (self.N, 2):
-            raise ValueError(f"Positions must be shape ({self.N}, 2)")
-            
-        if velocities is None:
-            velocities = np.zeros((self.N, 2))
-        if accelerations is None:
-            accelerations = np.zeros((self.N, 2))
-            
-        self.final_states = {
-            'positions': positions,
-            'velocities': velocities,
-            'accelerations': accelerations
-        }
+        # SCP iterations
+        iteration = 0
+        converged = False
+        prev_objective = float('inf')
+
+        
+        end_time = time.time()
+        print(f"Trajectory generation completed in {end_time - start_time:.3f} seconds")
+
+        return self.trajectories
 
     def precompute_optimization_matrices(self):
         N, K, h = self.N, self.K, self.h
 
         # -------- jerk (sparse) --------
-        self.A_jerk = self._jerk_matrix_sparse(N, K, h)
+        self.A_jerk = _jerk_matrix_sparse(N, K, h)
         self.l_jerk = np.full(2*N*(K-1), self.jerk_min, dtype=float)
         self.u_jerk = np.full(2*N*(K-1), self.jerk_max, dtype=float)
 
@@ -247,145 +284,19 @@ class SCP():
         self.l_pos_constraints = np.asarray(self.l_pos_constraints, dtype=float)
         self.u_pos_constraints = np.asarray(self.u_pos_constraints, dtype=float)
     
-    def generate_trajectories(self, max_iterations = 20):
-        """Main method to generate collision-free trajectories using SCP."""
-        if self.initial_states is None or self.final_states is None:
-            raise ValueError("Initial and final states must be set before generating trajectories")
-        
-        start_time = time.time()
-        #solve linear interpolation for initial guess of optimization variable
-        self._solve_initial_trajectory()
-
-        self.plot_positions()
-        # Initialize previous solution
-        prev_solution = self.accelerations
-
-        # SCP iterations
-        iteration = 0
-        converged = False
-        feasibility_satisfied = False
-        while iteration < max_iterations and not converged:
-            print(f"SCP iteration {iteration+1}/{max_iterations}")
-            
-            #Stack sparse constraint matrices
-            A = sp.vstack([
-                self.A_jerk, 
-                self.A_accel_initial, 
-                self.A_accel_final, 
-                self.A_accel_constraints, 
-                self.A_vel_constraints, 
-                self.A_pos_constraints
-            ])
-            
-            l = np.hstack([
-                self.l_jerk, 
-                self.l_accel_initial, 
-                self.l_accel_final, 
-                self.l_accel_constraints, 
-                self.l_vel_constraints, 
-                self.l_pos_constraints
-            ])
-            
-            u = np.hstack([
-                self.u_jerk, 
-                self.u_accel_initial, 
-                self.u_accel_final, 
-                self.u_accel_constraints, 
-                self.u_vel_constraints, 
-                self.u_pos_constraints
-            ])
-            
-            # Add collision avoidance constraints
-            A_collision, l_collision, u_collision = self.add_collision_constraints(prev_solution)
-            
-            # Combine all constraints
-            A = np.vstack([A, A_collision])
-            l = np.hstack([l, l_collision])
-            u = np.hstack([u, u_collision])
-            
-            # Minimize acceleration squared
-            P = np.eye(2 * self.N * self.K)
-            q = np.array([0] * 2 * self.N * self.K)
-            
-            # Convert to sparse matrices for OSQP
-            P = sp.csc_matrix(P)
-            A = sp.csc_matrix(A)
-            
-            # Setup and solve
-            problem = osqp.OSQP()
-            problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=True, warm_start=True, max_iter=10000)
-
-            # Warm start with previous solution
-            problem.warm_start(x=prev_solution)
-            
-            # Solve and save result
-            result = problem.solve()
-            
-            # Check for solver errors
-            if result.info.status != "solved":
-                print(f"Solver failed at iteration {iteration+1}: {result.info.status}")
-                return False, None, None
-            
-            # Update solution
-            new_solution = result.x
-            
-            # Check convergence
-            converged = False
-            solution_diff = np.linalg.norm(new_solution - prev_solution)
-            #print(f"Solution change: {solution_diff}")
-            if solution_diff < 0.01:  # Convergence threshold
-                converged = True
-
-            positions, velocities = self._accelerations_to_positions_velocities(new_solution)
-            avoidance_satisfied = self._fast_check_avoidance_constraints(positions)
-            if not avoidance_satisfied:
-                print("Warning: Avoidance constraints not satisfied at discrete timesteps.")
-                converged = False
-
-            # Perform continuous collision checking - only if avoidance is satisfied at discrete timesteps
-            if avoidance_satisfied:
-                continuous_avoidance_satisfied = self._optimized_check_continuous_avoidance(
-                    positions, velocities, new_solution
-                )
-                if not continuous_avoidance_satisfied:
-                    print("Warning: Continuous avoidance constraints not satisfied.")
-
-                    # If we've converged but continuous collision checking fails, continue iterations
-                    if converged and iteration < max_iterations - 1:
-                        print("Continuing iterations to resolve continuous collisions.")
-                        converged = False
-
-                feasibility_satisfied = self._simple_feasibility_check(positions, velocities, new_solution)
-                if not feasibility_satisfied:
-                    print("Warning: Feasibility constraints not satisfied.")
-
-            # Update previous solution for next iteration
-            prev_solution = new_solution
-            iteration += 1
-
-
-        # Save the final solution
-        self.accelerations = prev_solution
-        if feasibility_satisfied:
-            print(f"SCP trajectory solved successfully after {iteration} iterations.")
-            return True, positions, velocities
-        else:
-            print(f"SCP trajectory failed to satisfy feasibility constraints after {iteration} iterations.")
-            return False, positions, velocities
-        
     def _solve_initial_trajectory(self):
         """
-        Solve the optimization problem without the collision constraints but already taking into account:
-        Initial and Final positions, velocities, accelerations
-        Position boundary, min/max velocity, acceleration, jerk
+        Solve the initial trajectory optimization problem without avoidance constraints.
+        This serves as the starting point for the SCP iterations.
+        
+        Optimized to solve for all vehicles at once to avoid repeated problem setup.
         """
 
         problem = osqp.OSQP()
 
-        # Minimize acceleration squared
-        P = np.eye(2 * self.N * self.K)
+        P = np.eye(2*self.N*self.K)
 
-        A = np.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints])
+        A = sp.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints])
         l = np.hstack([self.l_jerk, self.l_accel_initial, self.l_accel_final, self.l_accel_constraints, self.l_vel_constraints, self.l_pos_constraints])
         u = np.hstack([self.u_jerk, self.u_accel_initial, self.u_accel_final, self.u_accel_constraints, self.u_vel_constraints, self.u_pos_constraints])
         q = np.array([0] * 2 * self.N * self.K)
@@ -394,8 +305,209 @@ class SCP():
         P = sp.csc_matrix(P)
         A = sp.csc_matrix(A)
 
-        problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=True)
+        problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=False)
 
-        # save the result in the optimization variable
         results = problem.solve()
-        self.accelerations = results.x
+        if results.info.status_val not in (1, 2):  # Solved / Solved Inaccurate
+            raise RuntimeError(f"OSQP failed: {results.info.status}")
+
+        acc_flat = results.x
+        accelerations = results.x.reshape(self.N, self.K, 2)
+        
+        return accelerations
+
+    def _compute_positions_velocities(self, accelerations):
+        """
+        Compute positions and velocities for all vehicles at all time steps
+        given the accelerations. Uses the stored flattened initial
+        positions and velocities.
+        
+        Args:
+            accelerations: (N, K, 2) array from optimization
+            
+        Returns:
+            positions: (N, K, 2)
+            velocities: (N, K, 2)
+        """
+        positions = np.zeros((self.N, self.K, 2))
+        velocities = np.zeros((self.N, self.K, 2))
+        
+        # reshape flattened arrays back into (N,2)
+        init_pos = self.initial_positions.reshape(self.N, 2)
+        init_vel = self.initial_velocities.reshape(self.N, 2)
+        
+        for i in range(self.N):
+            positions[i, 0] = init_pos[i]
+            velocities[i, 0] = init_vel[i]
+            
+            for k in range(1, self.K):
+                # velocity update
+                velocities[i, k] = init_vel[i] + self.h * np.sum(accelerations[i, :k], axis=0)
+                
+                # position update
+                positions[i, k] = init_pos[i] + self.h * k * init_vel[i]
+                for j in range(k):
+                    positions[i, k] += (self.h**2) * (k - j - 0.5) * accelerations[i, j]
+        
+        return positions, velocities
+
+    def visualize_trajectories(self, show_animation=True, save_path=None):
+        """Visualize the generated 2D trajectories."""
+        if self.trajectories is None:
+            raise ValueError("Trajectories not generated yet")
+            
+        positions = self.trajectories['positions']
+        
+        fig, ax = plt.subplots(figsize=(10, 10))
+        
+        # Set equal aspect ratio
+        ax.set_aspect('equal')
+        
+        # Plot bounds of the space
+        xmin, ymin, xmax, ymax = self.space_dims
+        ax.set_xlim([xmin, xmax])
+        ax.set_ylim([ymin, ymax])
+        
+        # Plot initial points as triangles
+        for i in range(self.N):
+            ax.scatter(
+                positions[i, 0, 0], positions[i, 0, 1],
+                marker='^', s=100, color=f'C{i}', label=f'Vehicle {i+1} start'
+            )
+            
+        # Plot final points as squares
+        for i in range(self.N):
+            ax.scatter(
+                positions[i, -1, 0], positions[i, -1, 1],
+                marker='s', s=100, color=f'C{i}', label=f'Vehicle {i+1} end'
+            )
+            
+        if show_animation:
+            # Animate trajectories
+            circles = []  # Keep track of vehicle circles
+            
+            # Initialize circles
+            for i in range(self.N):
+                vehicle_circle = Circle(positions[i, 0], self.R/2, color=f'C{i}', alpha=0.5)
+                circles.append(vehicle_circle)
+                ax.add_patch(vehicle_circle)
+            
+            # Safety circles showing minimum distance
+            safety_circles = []
+            for i in range(self.N):
+                safety_circle = Circle(positions[i, 0], self.R, color=f'C{i}', alpha=0.1, fill=True)
+                safety_circles.append(safety_circle)
+                ax.add_patch(safety_circle)
+            
+            # Animate
+            for k in range(self.K):
+                # Update circle positions
+                for i in range(self.N):
+                    # Update vehicle position
+                    circles[i].center = positions[i, k]
+                    safety_circles[i].center = positions[i, k]
+                    
+                    # Draw trajectory path segments
+                    if k > 0:
+                        ax.plot(
+                            positions[i, k-1:k+1, 0], 
+                            positions[i, k-1:k+1, 1],
+                            color=f'C{i}'
+                        )
+                
+                plt.pause(0.05)
+                plt.draw()
+        else:
+            # Plot full trajectories
+            for i in range(self.N):
+                # Plot the full trajectory
+                ax.plot(
+                    positions[i, :, 0], positions[i, :, 1],
+                    color=f'C{i}', label=f'Vehicle {i+1} path'
+                )
+                
+                # Plot safety circles at final positions
+                safety_circle = Circle(positions[i, -1], self.R, color=f'C{i}', alpha=0.1, fill=True)
+                ax.add_patch(safety_circle)
+        
+        ax.set_xlabel('x [m]')
+        ax.set_ylabel('y [m]')
+        ax.grid(True)
+        ax.legend()
+        plt.title('2D Collision-Free Trajectories')
+        
+        if save_path:
+            plt.savefig(save_path)
+            
+        plt.show()
+        
+        return fig, ax
+    
+    def visualize_time_snapshots(self, num_snapshots=5, save_path=None):
+        """
+        Visualize trajectories as a series of time snapshots similar to Figure 2 in the paper.
+        
+        Args:
+            num_snapshots: Number of snapshots to display
+            save_path: Optional path to save the figure
+        """
+        if self.trajectories is None:
+            raise ValueError("Trajectories not generated yet")
+        
+        positions = self.trajectories['positions']
+        K = self.K
+        
+        # Select frames to visualize evenly spaced in time
+        frame_indices = np.linspace(0, K-1, num_snapshots, dtype=int)
+        
+        # Create a figure with subplots
+        fig, axes = plt.subplots(1, num_snapshots, figsize=(15, 3))
+        
+        # Plot each frame
+        for f, frame_idx in enumerate(frame_indices):
+            ax = axes[f]
+            
+            # Set equal aspect ratio
+            ax.set_aspect('equal')
+            
+            # Remove ticks for cleaner visualization
+            ax.set_xticks([])
+            ax.set_yticks([])
+            
+            # Set bounds with some padding
+            xmin, ymin, xmax, ymax = self.space_dims
+            ax.set_xlim([xmin - 0.5, xmax + 0.5])
+            ax.set_ylim([ymin - 0.5, ymax + 0.5])
+            
+            # Show time in the title
+            current_time = frame_idx * self.h
+            ax.set_title(f"t = {current_time:.1f}s")
+            
+            # Plot circles for each vehicle at this time
+            for i in range(self.N):
+                pos = positions[i, frame_idx]  # Get x, y position
+                
+                # Create circles showing vehicle and required minimum distance
+                vehicle_circle = Circle(pos, self.R/2, color=f'C{i}', alpha=0.7)
+                safety_circle = Circle(pos, self.R, color=f'C{i}', alpha=0.1, fill=True)
+                
+                ax.add_patch(vehicle_circle)
+                ax.add_patch(safety_circle)
+                
+                # Draw trajectory lines up to current frame
+                if frame_idx > 0:
+                    # Get positions up to current frame
+                    traj_x = positions[i, :frame_idx+1, 0]
+                    traj_y = positions[i, :frame_idx+1, 1]
+                    
+                    # Draw trajectory
+                    ax.plot(traj_x, traj_y, '-', color=f'C{i}', alpha=0.7, linewidth=1)
+        
+        plt.tight_layout()
+        
+        if save_path:
+            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+        
+        plt.show()
+        
+        return fig, axes
