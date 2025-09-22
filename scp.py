@@ -296,14 +296,13 @@ class SCP():
 
         P = np.eye(2*self.N*self.K)
 
-        A = sp.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints])
+        A = sp.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints], format="csc")
         l = np.hstack([self.l_jerk, self.l_accel_initial, self.l_accel_final, self.l_accel_constraints, self.l_vel_constraints, self.l_pos_constraints])
         u = np.hstack([self.u_jerk, self.u_accel_initial, self.u_accel_final, self.u_accel_constraints, self.u_vel_constraints, self.u_pos_constraints])
         q = np.array([0] * 2 * self.N * self.K)
 
         # convert into sparse matrixes for OSQP
         P = sp.csc_matrix(P)
-        A = sp.csc_matrix(A)
 
         problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=False)
 
