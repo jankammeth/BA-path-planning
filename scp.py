@@ -72,14 +72,17 @@ class SCP():
                  min_distance = 0.1, 
                  space_dims=[-10, -10, 10, 10],
                  ):
+        
         #Initialize SCP
-
         self.N = n_vehicles
         self.T = time_horizon
         self.h = time_step
         self.K = int(self.T / self.h) + 1
         self.R = min_distance
         self.space_dims = space_dims
+
+        #Hyperparameters
+        self.convergence_tolerance = 1e-4
 
         # Initialization: Equality constraints and solution
         self.trajectories = None
@@ -96,12 +99,12 @@ class SCP():
         self.pos_max = np.array([space_dims[2], space_dims[3]])
 
         # Velocity and acceleration limits with margins for solver stability
-        self.vel_min = -3.0
-        self.vel_max = 3.0
+        self.vel_min = -1
+        self.vel_max = 1
         self.vel_margin = 0.002
 
-        self.acc_min = -105.0
-        self.acc_max = 105.0
+        self.acc_min = -15.0
+        self.acc_max = 15.0
         self.acc_margin = 0.02
 
         self.jerk_min = -15
@@ -132,6 +135,8 @@ class SCP():
         self.A_pos_constraints = None       #position inequality
         self.l_pos_constraints = []
         self.u_pos_constraints = []
+
+
 
         print("---=== SCP Problem initialized ===---")
         print(f"Number of timesteps: {self.K}")
@@ -173,15 +178,43 @@ class SCP():
 
         assert len(self.final_positions) == len(self.final_velocities) == len(self.final_accelerations)
 
-    def generate_trajectories(self, max_iterations=15, convergence_threshold=1e-3):
+    def generate_trajectories(self, max_iterations=15):
         """Main method to generate collision-free trajectories using SCP."""
         start_time = time.time()
 
         self.precompute_optimization_matrices()
-        accelerations = self._solve_initial_trajectory()
+        accelerations_flat = self._solve_initial_trajectory()
+
+        #SCP iterations
+        iteration = 0
+        converged = False
+        #prev_objective = float('inf')
+
+        #TODO: SCP loop 
+        while iteration < max_iterations and not converged:
+            print(f"SCP Iteration {iteration+1}")
+
+            new_accelerations_flat = self._solve_with_avoidance_constraints(accelerations_flat)
+            #TODO: return solver details 
+            
+            #TODO: ev. unstack accelerations for step norm
+            rel_step_norm = np.linalg.norm(new_accelerations_flat - accelerations_flat)/np.linalg.norm(accelerations_flat) #TODO: ev. return it to absolute tolerance
+            if rel_step_norm <= self.convergence_tolerance:
+                converged = True
+                print(f"Converged after {iteration+1} iterations.")
+
+            accelerations_flat = new_accelerations_flat
+            iteration += 1
 
 
+        #TODO: 
+        # converged = True
+        #   YES:    feasible -> _continuous_check_satisfied()?
+        #               YES:    done
+        #               NO:     restart SCP with smaller discretization
+        #   NO:     not feasible -> restart SCP with larger time_horizon
 
+        accelerations = accelerations_flat.reshape(self.N, self.K, 2)
         positions, velocities = self._compute_positions_velocities(accelerations)
 
         self.trajectories = {
@@ -189,11 +222,6 @@ class SCP():
             'velocities': velocities,  # Shape (N, K, 2)
             'accelerations': accelerations  # Shape (N, K, 2)
         }
-
-        # SCP iterations
-        iteration = 0
-        converged = False
-        prev_objective = float('inf')
 
         
         end_time = time.time()
@@ -294,15 +322,12 @@ class SCP():
 
         problem = osqp.OSQP()
 
-        P = np.eye(2*self.N*self.K)
+        P = sp.csc_matrix(np.eye(2*self.N*self.K))
+        q = np.array([0] * 2 * self.N * self.K)
 
         A = sp.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints], format="csc")
         l = np.hstack([self.l_jerk, self.l_accel_initial, self.l_accel_final, self.l_accel_constraints, self.l_vel_constraints, self.l_pos_constraints])
         u = np.hstack([self.u_jerk, self.u_accel_initial, self.u_accel_final, self.u_accel_constraints, self.u_vel_constraints, self.u_pos_constraints])
-        q = np.array([0] * 2 * self.N * self.K)
-
-        # convert into sparse matrixes for OSQP
-        P = sp.csc_matrix(P)
 
         problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=False)
 
@@ -310,10 +335,9 @@ class SCP():
         if results.info.status_val not in (1, 2):  # Solved / Solved Inaccurate
             raise RuntimeError(f"OSQP failed: {results.info.status}")
 
-        acc_flat = results.x
-        accelerations = results.x.reshape(self.N, self.K, 2)
+        accelerations_flat = results.x
         
-        return accelerations
+        return accelerations_flat
 
     def _compute_positions_velocities(self, accelerations):
         """
@@ -349,6 +373,192 @@ class SCP():
                     positions[i, k] += (self.h**2) * (k - j - 0.5) * accelerations[i, j]
         
         return positions, velocities
+    
+    def _solve_with_avoidance_constraints(self, accelerations_flat):
+        
+        A_collision, l_collision, u_collision = self._add_collision_constraints(accelerations_flat)
+        
+        #A_collision = sp.csc_matrix(A_collision, format="csc")
+
+        if not sp.issparse(A_collision):
+            A_collision = sp.csc_matrix(A_collision)
+            l_collision = np.asarray(l_collision, dtype=float)
+            u_collision = np.asarray(u_collision, dtype=float)
+
+        print("A_collision nnz:", A_collision.nnz)
+
+        P = sp.csc_matrix(np.eye(2 * self.N * self.K))
+        q = np.array([0] * 2 * self.N * self.K)
+
+        A = sp.vstack([self.A_jerk, self.A_accel_initial, self.A_accel_final, self.A_accel_constraints, self.A_vel_constraints, self.A_pos_constraints, A_collision], format="csc")
+        l = np.hstack([self.l_jerk, self.l_accel_initial, self.l_accel_final, self.l_accel_constraints, self.l_vel_constraints, self.l_pos_constraints, l_collision])
+        u = np.hstack([self.u_jerk, self.u_accel_initial, self.u_accel_final, self.u_accel_constraints, self.u_vel_constraints, self.u_pos_constraints, u_collision])
+
+        problem = osqp.OSQP()
+        problem.setup(P=P, q=q, A=A, l=l, u=u, verbose=False, warm_start=True, max_iter=10000)
+        problem.warm_start(x=accelerations_flat)
+
+        result = problem.solve()
+        #TODO: Solver failure statement
+        new_accelerations_flat = result.x
+        
+        return new_accelerations_flat
+
+    def _add_collision_constraints(self, previous_solution=None):
+        """
+        Add linearized collision avoidance constraints based on previous solution.
+        If no previous solution is provided, uses a straight-line trajectory.
+        
+        This includes:
+        1. Constraints between optimized crafts
+
+        The constraint ensures:
+            ||p_i[k] - p_j[k]||_2 >= R
+
+        Linearized as:
+            ||p_i^q[k] - p_j^q[k]||_2 + η^T[(p_i[k] - p_j[k]) - (p_i^q[k] - p_j^q[k])] >= R
+
+        where η = (p_i^q[k] - p_j^q[k]) / ||p_i^q[k] - p_j^q[k]||_2
+        """
+        #print("Calculation of the collision constraints...")
+        prev_positions, _ = self._accelerations_to_positions_velocities(previous_solution)
+
+        # Number of collision constraints:
+        # 1. Between vehicles: one for each pair of vehicles at each time step
+        n_pairs = (self.N * (self.N - 1)) // 2  # Number of vehicle pairs
+        n_constraints = n_pairs * self.K
+
+        # Initialize constraint matrix and bounds
+        A_collision = np.zeros((n_constraints, 2 * self.N * self.K))
+        l_collision = np.ones(n_constraints) * self.R
+        u_collision = np.ones(n_constraints) * np.inf
+
+        # Current constraint row index
+        row_idx = 0
+
+        # For each time step
+        for k in range(self.K):
+            # For each pair of vehicles (i,j) where i < j
+            for i in range(self.N):
+                for j in range(i+1, self.N):
+                    # Get previous positions
+                    p_i_prev = prev_positions[i, k]
+                    p_j_prev = prev_positions[j, k]
+
+                    # Compute difference and distance
+                    diff_vector = p_i_prev - p_j_prev
+                    dist = np.linalg.norm(diff_vector)
+
+                    # If vehicles are very close or colliding in previous solution,
+                    # adjust the vector to avoid numerical issues
+                    if dist < 1e-6:
+                        # Use a random unit vector if previous positions are identical
+                        angle = np.random.uniform(0, 2*np.pi)
+                        diff_vector = np.array([np.cos(angle), np.sin(angle)])
+                        dist = 1.0
+
+                    # Compute normalized direction vector η
+                    eta = diff_vector / dist
+
+                    # Construct the constraint row:
+                    # η^T * (p_i[k] - p_j[k]) >= R + η^T * (p_i^q[k] - p_j^q[k])
+
+                    # For vehicle i position at time step k
+                    pos_i_idx_x = self._position_index(i, k, 0)
+                    pos_i_idx_y = self._position_index(i, k, 1)
+
+                    # For vehicle j position at time step k
+                    pos_j_idx_x = self._position_index(j, k, 0)
+                    pos_j_idx_y = self._position_index(j, k, 1)
+
+                    # Set coefficients in constraint matrix
+                    # We need to convert from position indices to acceleration indices
+                    # This is where we use the position transformation matrix
+                    for m in range(k):
+                        # x-component coefficients for vehicle i
+                        A_collision[row_idx, 2*i*self.K + 2*m] = eta[0] * self.h**2 * (k - m - 0.5)
+                        # y-component coefficients for vehicle i
+                        A_collision[row_idx, 2*i*self.K + 2*m + 1] = eta[1] * self.h**2 * (k - m - 0.5)
+
+                        # x-component coefficients for vehicle j (negative because of p_i - p_j)
+                        A_collision[row_idx, 2*j*self.K + 2*m] = -eta[0] * self.h**2 * (k - m - 0.5)
+                        # y-component coefficients for vehicle j
+                        A_collision[row_idx, 2*j*self.K + 2*m + 1] = -eta[1] * self.h**2 * (k - m - 0.5)
+
+                    # Adjust the right-hand side:
+                    # R + η^T * (p_i^q[k] - p_j^q[k]) - η^T * (p_init_i + v_init_i*k*h - p_init_j - v_init_j*k*h)
+                    p_init_i_x = self.initial_positions[2*i]
+                    p_init_i_y = self.initial_positions[2*i+1]
+                    v_init_i_x = self.initial_velocities[2*i]
+                    v_init_i_y = self.initial_velocities[2*i+1]
+
+                    p_init_j_x = self.initial_positions[2*j]
+                    p_init_j_y = self.initial_positions[2*j+1]
+                    v_init_j_x = self.initial_velocities[2*j]
+                    v_init_j_y = self.initial_velocities[2*j+1]
+
+                    # Initial position contribution: η^T * (p_init_i - p_init_j)
+                    init_pos_contrib = eta[0] * (p_init_i_x - p_init_j_x) + eta[1] * (p_init_i_y - p_init_j_y)
+
+                    # Initial velocity contribution: η^T * (v_init_i - v_init_j) * k * h
+                    init_vel_contrib = eta[0] * (v_init_i_x - v_init_j_x) + eta[1] * (v_init_i_y - v_init_j_y)
+                    init_vel_contrib *= k * self.h
+
+                    # Constant term from linearization
+                    linearization_term = eta[0] * (p_i_prev[0] - p_j_prev[0]) + eta[1] * (
+                                p_i_prev[1] - p_j_prev[1]) - dist
+                    # The right-hand side becomes:
+                    # R + η^T * (p_i^q[k] - p_j^q[k]) - η^T * (p_init_i + v_init_i*k*h - p_init_j - v_init_j*k*h)
+                    rhs = self.R + linearization_term - (init_pos_contrib + init_vel_contrib)
+                    l_collision[row_idx] = rhs
+
+                    row_idx += 1
+        
+        # Return the constraint matrices and bounds
+        return A_collision, l_collision, u_collision
+    
+    def _position_index(self, vehicle_idx, time_step, coord):
+        """Helper method to get position index for a vehicle at time step"""
+        return 2 * vehicle_idx * self.K + 2 * time_step + coord
+
+    def _accelerations_to_positions_velocities(self, accelerations):
+            """
+            Convert acceleration solution to positions for all vehicles and time steps
+            """
+
+            N = self.N  # Number of vehicles
+            K = self.K  # Number of time steps
+            h = self.h  # Time step
+
+            # Initialize arrays
+            positions = np.zeros((N, K, 2))  # N vehicles, K time steps, 2 dimensions (x,y)
+            velocities = np.zeros((N, K, 2))
+
+            # Set initial positions and velocities
+            for i in range(N):
+                positions[i, 0, 0] = self.initial_positions[2 * i]  # x position
+                positions[i, 0, 1] = self.initial_positions[2 * i + 1]  # y position
+                velocities[i, 0, 0] = self.initial_velocities[2 * i]  # x velocity
+                velocities[i, 0, 1] = self.initial_velocities[2 * i + 1]  # y velocity
+
+            # Reconstruct trajectories for each vehicle
+            for i in range(N):
+                for k in range(1, K):
+                    # Extract accelerations for this vehicle at previous time step
+                    ax = accelerations[2 * i * K + 2 * (k - 1)]
+                    ay = accelerations[2 * i * K + 2 * (k - 1) + 1]
+
+                    # Update velocity using acceleration
+                    velocities[i, k, 0] = velocities[i, k - 1, 0] + h * ax
+                    velocities[i, k, 1] = velocities[i, k - 1, 1] + h * ay
+
+                    # Update position using velocity and acceleration
+                    positions[i, k, 0] = positions[i, k - 1, 0] + h * velocities[
+                        i, k - 1, 0] + 0.5 * h ** 2 * ax
+                    positions[i, k, 1] = positions[i, k - 1, 1] + h * velocities[
+                        i, k - 1, 1] + 0.5 * h ** 2 * ay
+
+            return positions, velocities
 
     def visualize_trajectories(self, show_animation=True, save_path=None):
         """Visualize the generated 2D trajectories."""

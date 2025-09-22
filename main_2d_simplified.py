@@ -13,9 +13,9 @@ def main():
     
     # Configuration parameters - more conservative parameters
     n_vehicles = 5
-    time_horizon = 4.0          # [s]
+    time_horizon = 10.0          # [s]
     time_step = 0.1             # [s]
-    min_distance = 0.3          # [m]
+    min_distance = 0.1          # [m]
     space_dims = [0,0,10, 10]   # [m]
     
     print(f"Configuration:")
@@ -84,54 +84,6 @@ def main():
     
     except Exception as e:
         print(f"Error during trajectory generation: {e}")
-        print("Trying simple scenario with fewer vehicles...")
-        test_simple_crossing()
-
-def test_simple_crossing():
-    """A simple test with just 2 vehicles to ensure the code works."""
-    print("------ Testing Simple Crossing Scenario ------")
-    
-    # Create planner for 2 vehicles with conservative parameters
-    planner = SCP(
-        n_vehicles=2,
-        time_horizon=5.0,      # Longer time
-        time_step=0.1,
-        min_distance=1.0,
-        space_dims=[0,0,10, 10]
-    )
-    
-    # Initial positions - vehicles with offset to avoid direct crossing
-    initial_positions = np.array([
-        [2.0, 3.0],  # bottom left
-        [8.0, 7.0],  # top right
-    ])
-    
-    # Final positions - vehicles need to exchange positions
-    final_positions = np.array([
-        [8.0, 7.0],  # bottom left -> top right
-        [2.0, 3.0],  # top right -> bottom left
-    ])
-    
-    # Set states
-    planner.set_initial_states(initial_positions)
-    planner.set_final_states(final_positions)
-    
-    # Generate trajectories
-    print("Generating trajectories for simple crossing scenario...")
-    start_time = time.time()
-    try:
-        trajectories = planner.generate_trajectories(max_iterations=10)
-        end_time = time.time()
-        
-        print(f"Computation time: {end_time - start_time:.3f} seconds")
-        
-        # Visualize
-        planner.visualize_trajectories(show_animation=True, save_path="simple_crossing.png")
-        planner.visualize_time_snapshots(num_snapshots=6, save_path="simple_crossing_snapshots.png")
-        
-        print("\nSimple scenario completed successfully!")
-    except Exception as e:
-        print(f"Error even with simple scenario: {e}")
 
 if __name__ == "__main__":
     main()
