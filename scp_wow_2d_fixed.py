@@ -289,7 +289,7 @@ class SCPCraft2DTrajectory:
         # Solve the problem
         objective = cp.Minimize(cp.sum(objective_terms))
         problem = cp.Problem(objective, constraints)
-        problem.solve(solver=cp.ECOS, verbose=True)
+        problem.solve(solver=cp.ECOS, verbose=False)
         
         # Extract solution to numpy array
         accelerations = a_vars.value

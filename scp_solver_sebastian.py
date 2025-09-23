@@ -1,10 +1,11 @@
+#scp_solver_sebastian.py
+
 import numpy as np
 import osqp
 import scipy.sparse as sp
 from scipy.sparse import block_diag
 
 import matplotlib.pyplot as plt
-from .plotter_scp import TrajectoryPlotter
 
 class SCPSolver():
     def __init__(self,
@@ -885,8 +886,8 @@ def adjust_paths_with_crossings(start_coords, end_coords, reg_term=1e-1):
 
 
 if __name__ == "__main__":
-    initial_states = np.array([[0.0, 0.0, 0, 0, 0, 0], [2.0, 2.0, 0, 0, 0, 0], [4.0, 1.0, 0, 0, 0, 0]])
-    final_states = np.array([[4.0, 4.0, 0, 0, 0, 0], [-1.0, -1.0, 0, 0, 0, 0], [1.0, 3.0, 0, 0, 0, 0]])
+    initial_states = np.array([[0.0, 0.0, 0, 0, 0, 0], [5.0, 5.0, 0, 0, 0, 0], [4.0, 1.0, 0, 0, 0, 0]])
+    final_states = np.array([[8.0, 8.0, 0, 0, 0, 0], [0.0, 0.0, 0, 0, 0, 0], [1.0, 3.0, 0, 0, 0, 0]])
 
     n_vehicles = len(initial_states)
     print(f"Number of vehicles: {n_vehicles}")
@@ -901,14 +902,9 @@ if __name__ == "__main__":
 
     if solver.generate_trajectories():
         print("Trajectory generation successful")
-        plotter = TrajectoryPlotter(solver)
-
-        plotter.plot_static()
-        plotter.animate(interval=50)
-        plotter.plot_velocity_profile()
+        solver.plot_positions
     else:
         print("Trajectory generation failed")
-
 
 
 

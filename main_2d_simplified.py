@@ -4,6 +4,7 @@ import time
 from scp_wow_2d_fixed import SCPCraft2DTrajectory
 from test import SCPOSQPTrajectory
 from scp import SCP
+from position_generator import generate_positions, print_distance_analysis
 
 def main():
     """
@@ -12,11 +13,11 @@ def main():
     print("------ WOW Fleet Collision-Free 2D Trajectory Generation ------")
     
     # Configuration parameters - more conservative parameters
-    n_vehicles = 5
-    time_horizon = 10.0          # [s]
+    n_vehicles = 2
+    time_horizon = 20.0         # [s]
     time_step = 0.1             # [s]
-    min_distance = 0.1          # [m]
-    space_dims = [0,0,10, 10]   # [m]
+    min_distance = 1.0         # [m]
+    space_dims = [0,0,20, 20]   # [m]
     
     print(f"Configuration:")
     print(f"  Number of vehicles: {n_vehicles}")
@@ -53,6 +54,12 @@ def main():
         [2.0, 2.0],    # top right -> bottom left
     ])
     
+    initial_positions, final_positions = generate_positions(
+            n_vehicles, min_distance
+        )
+    print(f"Successfully generated positions for {n_vehicles} vehicles")
+
+    distance_analysis = print_distance_analysis(initial_positions, final_positions)
     # Set initial & final states
     planner.set_initial_states(initial_positions)
     planner.set_final_states(final_positions)
