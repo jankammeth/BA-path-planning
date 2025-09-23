@@ -210,6 +210,7 @@ def visualize_layout(initial_positions, final_positions, min_distance=0.4):
     ax.legend(bbox_to_anchor=(1.05, 1), loc='upper left')
     
     plt.tight_layout()
+    plt.savefig("position_generator")
     plt.show()
     
     return fig, ax
@@ -337,7 +338,7 @@ def print_distance_analysis(initial_positions, final_positions):
 if __name__ == "__main__":
     # Test the position generation
     try:
-        initial_pos, final_pos = generate_positions(5, min_distance=0.4)
+        initial_pos, final_pos = generate_positions(10, min_distance=0.4)
         print("Generated positions successfully!")
         print(f"Initial positions:\n{initial_pos}")
         print(f"Final positions:\n{final_pos}")

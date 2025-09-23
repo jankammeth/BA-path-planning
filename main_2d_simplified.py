@@ -13,7 +13,7 @@ def main():
     print("------ WOW Fleet Collision-Free 2D Trajectory Generation ------")
     
     # Configuration parameters - more conservative parameters
-    n_vehicles = 2
+    n_vehicles = 10
     time_horizon = 20.0         # [s]
     time_step = 0.1             # [s]
     min_distance = 1.0         # [m]
