@@ -1,8 +1,6 @@
 import numpy as np
 import matplotlib.pyplot as plt
 import time
-from scp_wow_2d_fixed import SCPCraft2DTrajectory
-from test import SCPOSQPTrajectory
 from scp import SCP
 from position_generator import generate_positions, print_distance_analysis
 
@@ -13,10 +11,11 @@ def main():
     print("------ WOW Fleet Collision-Free 2D Trajectory Generation ------")
     
     # Configuration parameters - more conservative parameters
-    n_vehicles = 10
-    time_horizon = 20.0         # [s]
-    time_step = 0.1             # [s]
-    min_distance = 1.0         # [m]
+    n_vehicles =20
+    time_horizon = 10      
+      # [s]
+    time_step = 0.2             # [s]
+    min_distance = 0.8         # [m]
     space_dims = [0,0,20, 20]   # [m]
     
     print(f"Configuration:")

@@ -46,7 +46,7 @@ class SCP():
                  time_horizon = 3.0,
                  time_step = 0.1,
                  min_distance = 0.1, 
-                 space_dims=[-10, -10, 10, 10],
+                 space_dims=[0, 0, 20, 20],
                  ):
         
         #Initialize SCP
@@ -58,7 +58,7 @@ class SCP():
         self.space_dims = space_dims
 
         #Hyperparameters
-        self.convergence_tolerance = 1e-2
+        self.convergence_tolerance = 1.5e-2
         self.safety_margin = 0.0  # Match first implementation
 
         # Initialization: Equality constraints and solution
@@ -76,11 +76,11 @@ class SCP():
         self.pos_max = np.array([space_dims[2], space_dims[3]])
 
         # Limits to match first implementation
-        self.vel_min = -10
-        self.vel_max = 10
+        self.vel_min = -2
+        self.vel_max = 2
 
-        self.acc_min = -5.0
-        self.acc_max = 5.0
+        self.acc_min = -15.0
+        self.acc_max = 15.0
 
         self.jerk_min = -20
         self.jerk_max = 20
@@ -144,54 +144,24 @@ class SCP():
 
     def generate_trajectories(self, max_iterations=15):
         """Main method to generate collision-free trajectories using SCP."""
+        is_feasible = False
+        
         start_time = time.time()
 
         self.precompute_optimization_matrices()
         accelerations_flat = self._solve_initial_trajectory()
 
+        init_guess_positions, _ = self._compute_positions_velocities(accelerations_flat.reshape(self.N, self.K, 2))
+
+        is_feasible = self._fast_check_avoidance_constraints(init_guess_positions)
+
         #SCP iterations
         iteration = 0
         converged = False
 
-        # Fast check: if initial solution has no collisions, return early
-        try:
-            init_positions, init_velocities = self._accelerations_to_positions_velocities(accelerations_flat)
-            if self.N <= 1:
-                accelerations = accelerations_flat.reshape(self.N, self.K, 2)
-                self.trajectories = {
-                    'positions': init_positions,
-                    'velocities': init_velocities,
-                    'accelerations': accelerations
-                }
-                print("No collision possible (N<=1); skipping SCP iterations.")
-                end_time = time.time()
-                print(f"Trajectory generation completed in {end_time - start_time:.3f} seconds")
-                return self.trajectories
+        #TODO: fast check --> exit if already no collision
 
-            # Compute pairwise distances over time and check minimum
-            # positions shape: (N, K, 2)
-            diff = init_positions[:, None, :, :] - init_positions[None, :, :, :]  # (N, N, K, 2)
-            dist2 = np.sum(diff*diff, axis=-1)  # (N, N, K)
-            iu = np.triu_indices(self.N, 1)
-            pair_dist2 = dist2[iu]  # (num_pairs, K)
-            min_pair_dist2 = np.min(pair_dist2) if pair_dist2.size > 0 else np.inf
-            thresh2 = (self.R + self.safety_margin) ** 2
-            if min_pair_dist2 >= thresh2:
-                accelerations = accelerations_flat.reshape(self.N, self.K, 2)
-                self.trajectories = {
-                    'positions': init_positions,
-                    'velocities': init_velocities,
-                    'accelerations': accelerations
-                }
-                print("Initial trajectory collision-free; skipping SCP iterations.")
-                end_time = time.time()
-                print(f"Trajectory generation completed in {end_time - start_time:.3f} seconds")
-                return self.trajectories
-        except Exception as e:
-            # If the quick check fails for any reason, proceed with SCP iterations
-            print(f"Fast no-collision check failed, continuing. Reason: {e}")
-
-        while iteration < max_iterations and not converged:
+        while iteration < max_iterations and not converged and not is_feasible:
             print(f"SCP Iteration {iteration+1}")
 
             new_accelerations_flat = self._solve_with_avoidance_constraints(accelerations_flat)
@@ -413,7 +383,7 @@ class SCP():
                     positions[i, k] += self.h**2 * (k - j - 0.5) * accelerations[i, j]
         
         return positions, velocities
-    
+
     def _solve_with_avoidance_constraints(self, accelerations_flat):
         """Solve with collision avoidance constraints."""
         
@@ -467,83 +437,109 @@ class SCP():
 
     def _add_collision_constraints(self, previous_solution):
         """
-        Add linearized collision avoidance constraints exactly matching the first implementation.
+        Sparse + faster version.
+        Builds A_collision as CSC directly via (rows, cols, vals) lists.
+        Keeps identical functionality and row ordering as the original.
         """
-        # Convert flat solution to positions
-        prev_positions, _ = self._accelerations_to_positions_velocities(previous_solution)
+        N, K, h = self.N, self.K, self.h
+        Rm = self.R + self.safety_margin
 
-        # Number of collision constraints
-        n_pairs = (self.N * (self.N - 1)) // 2
-        n_constraints = n_pairs * self.K
+        # 1) Recompute previous positions (same as before)
+        prev_positions, _ = self._accelerations_to_positions_velocities(previous_solution)  # (N, K, 2)
 
-        # Initialize constraint matrix and bounds
-        A_collision = np.zeros((n_constraints, 2 * self.N * self.K))
-        l_collision = np.ones(n_constraints) * (self.R + self.safety_margin)
-        u_collision = np.ones(n_constraints) * np.inf
+        # 2) Counts
+        n_pairs = (N * (N - 1)) // 2
+        n_constraints = n_pairs * K
+        n_vars = 2 * N * K
 
-        # Current constraint row index
+        # 3) Pre-fetch initial states into 2D arrays for faster access
+        init_pos = self.initial_positions.reshape(N, 2)
+        init_vel = self.initial_velocities.reshape(N, 2)
+
+        # 4) Sparse builders
+        rows, cols, vals = [], [], []
+        l_collision = np.full(n_constraints, Rm, dtype=float)
+        u_collision = np.full(n_constraints, np.inf, dtype=float)
+
         row_idx = 0
 
-        # For each time step
-        for k in range(self.K):
-            # For each pair of vehicles (i,j) where i < j
-            for i in range(self.N):
-                for j in range(i+1, self.N):
-                    # Get previous positions
-                    p_i_prev = prev_positions[i, k]
-                    p_j_prev = prev_positions[j, k]
+        # Helper: column bases per vehicle (start index of that vehicle's 2K accel vars)
+        base_cols = np.arange(N, dtype=int) * (2 * K)
 
-                    # Compute difference and distance
-                    diff_vector = p_i_prev - p_j_prev
-                    dist = np.linalg.norm(diff_vector)
+        # Main loops: keep exact ordering: for k in 0..K-1, for i, for j>i
+        for k in range(K):
+            # Precompute the weights for all a[0..k-1] at this time k: h^2 * (k - m - 0.5)
+            if k > 0:
+                m_idx = np.arange(k)
+                w = (h * h) * (k - m_idx - 0.5)  # shape (k,)
+            else:
+                w = None  # no accel contribution at k=0
 
-                    # Handle numerical issues
+            for i in range(N):
+                for j in range(i + 1, N):
+                    # ----- Linearization direction from previous positions -----
+                    pi_prev = prev_positions[i, k]  # (2,)
+                    pj_prev = prev_positions[j, k]  # (2,)
+                    diff = pi_prev - pj_prev
+                    dist = np.hypot(diff[0], diff[1])
+
                     if dist < 1e-6:
-                        angle = np.random.uniform(0, 2*np.pi)
-                        diff_vector = np.array([np.cos(angle), np.sin(angle)])
+                        # Avoid numerical issues by picking a random direction
+                        angle = np.random.uniform(0.0, 2.0 * np.pi)
+                        eta = np.array([np.cos(angle), np.sin(angle)])
                         dist = 1.0
+                    else:
+                        eta = diff / dist  # (2,)
 
-                    # Compute normalized direction vector η
-                    eta = diff_vector / dist
+                    # ----- Fill sparse coeffs for this constraint row -----
+                    if k > 0:
+                        # vehicle i columns for m=0..k-1
+                        base_i = base_cols[i]
+                        # x columns are base_i + 2*m, y columns are base_i + 2*m + 1
+                        # Append x coefficients (eta[0] * w[m])
+                        rows.extend([row_idx] * k)
+                        cols.extend(base_i + 2 * m_idx)
+                        vals.extend(eta[0] * w)
 
-                    # Build constraint: η^T * (p_i[k] - p_j[k]) >= R + linearization_term
-                    # where p_i[k] = p_init_i + k*h*v_init_i + sum(h^2*(k-m-0.5)*a_i[m])
+                        # Append y coefficients (eta[1] * w[m])
+                        rows.extend([row_idx] * k)
+                        cols.extend(base_i + 2 * m_idx + 1)
+                        vals.extend(eta[1] * w)
 
-                    # Set coefficients for acceleration variables
-                    for m in range(k):
-                        # Vehicle i contributions (positive)
-                        A_collision[row_idx, 2*i*self.K + 2*m] = eta[0] * self.h**2 * (k - m - 0.5)
-                        A_collision[row_idx, 2*i*self.K + 2*m + 1] = eta[1] * self.h**2 * (k - m - 0.5)
+                        # vehicle j columns (negative contributions)
+                        base_j = base_cols[j]
+                        rows.extend([row_idx] * k)
+                        cols.extend(base_j + 2 * m_idx)
+                        vals.extend(-eta[0] * w)
 
-                        # Vehicle j contributions (negative)
-                        A_collision[row_idx, 2*j*self.K + 2*m] = -eta[0] * self.h**2 * (k - m - 0.5)
-                        A_collision[row_idx, 2*j*self.K + 2*m + 1] = -eta[1] * self.h**2 * (k - m - 0.5)
+                        rows.extend([row_idx] * k)
+                        cols.extend(base_j + 2 * m_idx + 1)
+                        vals.extend(-eta[1] * w)
 
-                    # Compute right-hand side with linearization
-                    p_init_i_x = self.initial_positions[2*i]
-                    p_init_i_y = self.initial_positions[2*i+1]
-                    v_init_i_x = self.initial_velocities[2*i]
-                    v_init_i_y = self.initial_velocities[2*i+1]
+                    # ----- RHS (same formula as your dense version) -----
+                    # Initial position + velocity contributions
+                    p_init_i = init_pos[i]  # (2,)
+                    p_init_j = init_pos[j]  # (2,)
+                    v_init_i = init_vel[i]  # (2,)
+                    v_init_j = init_vel[j]  # (2,)
 
-                    p_init_j_x = self.initial_positions[2*j]
-                    p_init_j_y = self.initial_positions[2*j+1]
-                    v_init_j_x = self.initial_velocities[2*j]
-                    v_init_j_y = self.initial_velocities[2*j+1]
+                    init_pos_contrib = eta @ (p_init_i - p_init_j)
+                    init_vel_contrib = eta @ (v_init_i - v_init_j) * (k * h)
 
-                    # Initial position + velocity contribution
-                    init_pos_contrib = eta[0] * (p_init_i_x - p_init_j_x) + eta[1] * (p_init_i_y - p_init_j_y)
-                    init_vel_contrib = eta[0] * (v_init_i_x - v_init_j_x) + eta[1] * (v_init_i_y - v_init_j_y)
-                    init_vel_contrib *= k * self.h
+                    # Linearization term (ηᵀ(p_i_prev - p_j_prev) - ||p_i_prev - p_j_prev||)
+                    linearization_term = eta @ (pi_prev - pj_prev) - dist
 
-                    # Linearization term
-                    linearization_term = eta[0] * (p_i_prev[0] - p_j_prev[0]) + eta[1] * (p_i_prev[1] - p_j_prev[1]) - dist
-
-                    # Set the RHS
-                    rhs = (self.R + self.safety_margin) + linearization_term - (init_pos_contrib + init_vel_contrib)
+                    rhs = Rm + linearization_term - (init_pos_contrib + init_vel_contrib)
                     l_collision[row_idx] = rhs
 
                     row_idx += 1
-        
+
+        # Build sparse matrix
+        A_collision = sp.coo_matrix(
+            (vals, (rows, cols)),
+            shape=(n_constraints, n_vars)
+        ).tocsc()
+
         return A_collision, l_collision, u_collision
 
     def _accelerations_to_positions_velocities(self, accelerations_flat):
@@ -584,112 +580,135 @@ class SCP():
         
         return positions, velocities
 
-    def visualize_trajectories(self, show_animation=True, save_path=None):
-        """Visualize the generated 2D trajectories."""
+    def _fast_check_avoidance_constraints(self, positions):
+        """
+        Optimized version that checks if avoidance constraints are satisfied
+        at discrete timesteps. Uses vectorized operations for speed.
+        """
+        for k in range(self.K):
+            # Get positions for all vehicles at time k
+            pos_k = positions[:, k, :]  # Shape (N, 2)
+
+            # Compute pairwise differences
+            for i in range(self.N):
+                for j in range(i+1, self.N):
+                    dist = np.linalg.norm(pos_k[i] - pos_k[j])
+                    if dist < self.R - 0.01:
+                        print(f"Avoidance constraint violation at timestep {k} between vehicles {i} and {j}: distance = {dist:.3f}")
+                        return False
+        return True
+
+    # Replace your existing visualize_trajectories with this version
+    def visualize_trajectories(self, show_animation=False, save_path="trajectories.pdf"):
+        """Visualize the generated 2D trajectories with same styling as position_generator."""
         if self.trajectories is None:
             raise ValueError("Trajectories not generated yet")
-            
-        positions = self.trajectories['positions']
-        
+
+        import matplotlib as mpl
+        from matplotlib.patches import Circle, Rectangle
+        mpl.rcParams.update({
+            "font.family": "sans-serif",
+            "font.size": 16,
+            "axes.titlesize": 20,
+            "axes.labelsize": 18,
+            "xtick.labelsize": 14,
+            "ytick.labelsize": 14,
+            "legend.fontsize": 14
+        })
+
+        positions = self.trajectories['positions']  # (N, K, 2)
+        colors = self._quadrant_colors(center=(10.0, 10.0))
+
         fig, ax = plt.subplots(figsize=(10, 10))
-        
-        # Set equal aspect ratio
         ax.set_aspect('equal')
-        
-        # Plot bounds of the space
+
+        # Bounds (draw the 20x20 boundary box like in position_generator)
         xmin, ymin, xmax, ymax = self.space_dims
-        ax.set_xlim([xmin, xmax])
-        ax.set_ylim([ymin, ymax])
-        
-        # Plot initial points as triangles
+        ax.set_xlim(xmin - 1, xmax + 1)
+        ax.set_ylim(ymin - 1, ymax + 1)
+        boundary = Rectangle((xmin, ymin), xmax - xmin, ymax - ymin,
+                            linewidth=2, edgecolor='black', facecolor='none',
+                            linestyle='--', alpha=0.7)
+        ax.add_patch(boundary)
+
+        # Corner circles (centers at 3.5, 16.5; radius = 2.5)
+        circle_centers = np.array([
+            [xmin + 3.5, ymin + 3.5],
+            [xmax - 3.5, ymin + 3.5],
+            [xmin + 3.5, ymax - 3.5],
+            [xmax - 3.5, ymax - 3.5],
+        ])
+        for c in circle_centers:
+            ax.add_patch(Circle(c, 2.5, linewidth=1.5, edgecolor='grey',
+                                facecolor='none', alpha=0.7))
+
+        # Central diamond (square side 6m rotated 45°)
+        diamond_center = np.array([(xmin + xmax) / 2.0, (ymin + ymax) / 2.0])
+        diamond_size = 6.0 / np.sqrt(2.0)  # distance center->vertex
+        diamond_vertices = np.array([
+            [diamond_center[0], diamond_center[1] + diamond_size],
+            [diamond_center[0] + diamond_size, diamond_center[1]],
+            [diamond_center[0], diamond_center[1] - diamond_size],
+            [diamond_center[0] - diamond_size, diamond_center[1]],
+        ])
+        dx = np.append(diamond_vertices[:, 0], diamond_vertices[0, 0])
+        dy = np.append(diamond_vertices[:, 1], diamond_vertices[0, 1])
+        ax.plot(dx, dy, linewidth=1.5, color='grey', alpha=0.7)
+
+        # Plot start markers (triangles), end markers (squares), and paths
         for i in range(self.N):
-            ax.scatter(
-                positions[i, 0, 0], positions[i, 0, 1],
-                marker='^', s=100, color=f'C{i}', label=f'Vehicle {i+1} start'
-            )
-            
-        # Plot final points as squares
-        for i in range(self.N):
-            ax.scatter(
-                positions[i, -1, 0], positions[i, -1, 1],
-                marker='s', s=100, color=f'C{i}', label=f'Vehicle {i+1} end'
-            )
-            
-        if show_animation:
-            # Animate trajectories
-            circles = []  # Keep track of vehicle circles
-            
-            # Initialize circles
-            for i in range(self.N):
-                vehicle_circle = Circle(positions[i, 0], self.R/2, color=f'C{i}', alpha=0.5)
-                circles.append(vehicle_circle)
-                ax.add_patch(vehicle_circle)
-            
-            # Safety circles showing minimum distance
-            safety_circles = []
-            for i in range(self.N):
-                safety_circle = Circle(positions[i, 0], self.R, color=f'C{i}', alpha=0.1, fill=True)
-                safety_circles.append(safety_circle)
-                ax.add_patch(safety_circle)
-            
-            # Animate
-            for k in range(self.K):
-                # Update circle positions
-                for i in range(self.N):
-                    # Update vehicle position
-                    circles[i].center = positions[i, k]
-                    safety_circles[i].center = positions[i, k]
-                    
-                    # Draw trajectory path segments
-                    if k > 0:
-                        ax.plot(
-                            positions[i, k-1:k+1, 0], 
-                            positions[i, k-1:k+1, 1],
-                            color=f'C{i}'
-                        )
-                
-                plt.pause(0.05)
-                plt.draw()
-        else:
-            # Plot full trajectories
-            for i in range(self.N):
-                # Plot the full trajectory
-                ax.plot(
-                    positions[i, :, 0], positions[i, :, 1],
-                    color=f'C{i}', label=f'Vehicle {i+1} path'
-                )
-                
-                # Plot safety circles at final positions
-                safety_circle = Circle(positions[i, -1], self.R, color=f'C{i}', alpha=0.1, fill=True)
-                ax.add_patch(safety_circle)
-        
-        ax.set_xlabel('x [m]')
-        ax.set_ylabel('y [m]')
-        ax.grid(True)
-        ax.legend()
-        plt.title('2D Collision-Free Trajectories')
-        
+            # Start
+            ax.scatter(positions[i, 0, 0], positions[i, 0, 1],
+                    marker='o', s=100, color=colors[i], label=None)
+            ax.add_patch(Circle(positions[i, 0], self.R, color=colors[i],
+                                alpha=0.1, fill=True))
+            # End
+            ax.scatter(positions[i, -1, 0], positions[i, -1, 1],
+                    marker='s', s=100, color=colors[i], label=None)
+            ax.add_patch(Circle(positions[i, -1], self.R, color=colors[i],
+                                alpha=0.1, fill=True))
+            # Full trajectory
+            ax.plot(positions[i, :, 0], positions[i, :, 1],
+                    color=colors[i], linewidth=1.5, alpha=0.8)
+
+        # Legend (simplified start vs stop like in position_generator)
+        import matplotlib.lines as mlines
+        start_handle = mlines.Line2D([], [], color='black', marker='o',
+                                    linestyle='None', markersize=8, label='Start')
+        stop_handle = mlines.Line2D([], [], color='black', marker='s',
+                                    linestyle='None', markersize=8, label='Stop')
+        leg = ax.legend(handles=[start_handle, stop_handle],
+                        loc='lower right',
+                        bbox_to_anchor=(0.95, 0.05),
+                        frameon=True, facecolor='white', edgecolor='none',
+                        framealpha=0.6, borderpad=1.2, labelspacing=1.0,
+                        handlelength=1.8, handletextpad=0.8, fontsize=11)
+
+        ax.set_xlabel(r"$x$ [m]")
+        ax.set_ylabel(r"$y$ [m]")
+        ax.set_title('2D Collision-Free Trajectories')
+
+        plt.tight_layout()
         if save_path:
-            plt.savefig(save_path)
-            
+            plt.savefig(save_path, dpi=400, bbox_inches='tight', format="pdf")
         plt.show()
-        
+
         return fig, ax
-    
+
     def visualize_time_snapshots(self, num_snapshots=5, save_path=None):
         """
-        Visualize trajectories as a series of time snapshots similar to Figure 2 in the paper.
-        
-        Args:
-            num_snapshots: Number of snapshots to display
-            save_path: Optional path to save the figure
+        Visualize trajectories as a series of time snapshots.
+        Colors now match quadrant-based colors used elsewhere.
         """
         if self.trajectories is None:
             raise ValueError("Trajectories not generated yet")
         
         positions = self.trajectories['positions']
         K = self.K
-        
+
+        # Use the same quadrant-based colors as other plots
+        colors = self._quadrant_colors(center=(10.0, 10.0))
+
         # Select frames to visualize evenly spaced in time
         frame_indices = np.linspace(0, K-1, num_snapshots, dtype=int)
         
@@ -716,35 +735,54 @@ class SCP():
             current_time = frame_idx * self.h
             ax.set_title(f"t = {current_time:.1f}s")
             
-            # Plot circles for each vehicle at this time
+            # Plot circles and paths with the quadrant colors
             for i in range(self.N):
-                pos = positions[i, frame_idx]  # Get x, y position
-                
-                # Create circles showing vehicle and required minimum distance
-                vehicle_circle = Circle(pos, self.R/2, color=f'C{i}', alpha=0.7)
-                safety_circle = Circle(pos, self.R, color=f'C{i}', alpha=0.1, fill=True)
-                
+                pos = positions[i, frame_idx]  # (x, y)
+
+                # Vehicle disc and safety circle
+                vehicle_circle = Circle(pos, self.R/2, color=colors[i], alpha=0.7)
+                safety_circle  = Circle(pos, self.R,   color=colors[i], alpha=0.1, fill=True)
                 ax.add_patch(vehicle_circle)
                 ax.add_patch(safety_circle)
                 
-                # Draw trajectory lines up to current frame
+                # Trajectory up to current frame
                 if frame_idx > 0:
-                    # Get positions up to current frame
                     traj_x = positions[i, :frame_idx+1, 0]
                     traj_y = positions[i, :frame_idx+1, 1]
-                    
-                    # Draw trajectory
-                    ax.plot(traj_x, traj_y, '-', color=f'C{i}', alpha=0.7, linewidth=1)
+                    ax.plot(traj_x, traj_y, '-', color=colors[i], alpha=0.7, linewidth=1)
         
         plt.tight_layout()
         
         if save_path:
-            plt.savefig(save_path, dpi=300, bbox_inches='tight')
+            plt.savefig(save_path, dpi=300, bbox_inches='tight', format="pdf")
         
         plt.show()
         
-        return fig, axes
-
+        return fig, axes       
+    # Put this helper inside class SCP (anywhere above visualize_trajectories)
+    def _quadrant_colors(self, center=(10.0, 10.0)):
+        """
+        Assign a color to each craft based on the quadrant of its initial position.
+        Quadrants (relative to `center`):
+        Q0: top-right, Q1: top-left, Q2: bottom-left, Q3: bottom-right
+        Returns: list of RGB tuples length N.
+        """
+        cx, cy = center
+        # Same palette as position_generator.quadrant_colors
+        palette = [(0.17, 0.28, 0.46), (0.54, 0.31, 0.56), (1.00, 0.39, 0.38), (1.00, 0.65, 0.00)]
+        init_pos = self.initial_positions.reshape(self.N, 2)
+        colors = []
+        for x, y in init_pos:
+            if x >= cx and y >= cy:
+                q = 0
+            elif x < cx and y >= cy:
+                q = 1
+            elif x < cx and y < cy:
+                q = 2
+            else:
+                q = 3
+            colors.append(palette[q])
+        return colors
 
 # Example usage to test the implementation
 if __name__ == "__main__":
