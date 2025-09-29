@@ -6,10 +6,9 @@ from typing import Optional
 
 # =========================
 # Config: optional custom font for elegant lowercase italic "of"
-# =========================
 CUSTOM_ITALIC_FONT_PATH = None  # e.g., "/path/to/EBGaramond-Italic.ttf"
 
-# ---------- 8-color palette (distinct / colorblind-friendly) ----------
+# ---------- 8-color palette ----------
 palette8 = [
     (0.00, 0.13, 0.18),  # deep navy (#00202E)
     (0.00, 0.25, 0.36),  # dark teal (#003F5C)
