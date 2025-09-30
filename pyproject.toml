@@ -40,6 +40,7 @@ include = ["path_planning*"]
 [project.scripts]
 compute-trajectories = "path_planning.cli.compute_trajectories:main"
 compute-trajectories-batch = "path_planning.cli.compute_trajectories_batch:main"
+scp-boxplot = "path_planning.viz.plot_runtime_boxplot:main"
 
 [tool.black]
 line-length = 100
