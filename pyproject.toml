@@ -1,0 +1,59 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "path-planning"
+version = "0.1.0"
+description = "Large-scale collision-free trajectory generation."
+readme = "README.md"
+authors = [{ name="Jan Kamm" }]
+license = { text = "Apache" }
+requires-python = ">=3.10"
+
+# Core dependencies
+dependencies = [
+    "numpy",
+    "scipy",
+    "matplotlib",
+    "osqp",
+    "pyyaml"
+    # "svgpathtools"
+]
+
+# Optional dependencies (for dev)
+[project.optional-dependencies]
+dev = [
+    "pytest>=8",            #tests
+    "pytest-cov>=5",        #test coverate reporting
+    "pre-commit>=3.7",
+    "commitizen>=3.30",     #commit msg linter
+    "black>=24.8",
+    "ruff>=0.6",
+    "tomli; python_version < '3.11'",
+]
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["path_planning*"]
+
+[project.scripts]
+compute-trajectories = "path_planning.cli.compute_trajectories:main"
+compute-trajectories-batch = "path_planning.cli.compute_trajectories_batch:main"
+
+[tool.black]
+line-length = 100
+
+[tool.ruff]
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["path_planning"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

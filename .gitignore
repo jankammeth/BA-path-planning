@@ -1,0 +1,44 @@
+# Wandb files (for the future)
+wandb/
+
+# OS generated files
+.DS_Store
+# --- OS / Editors ---
+.DS_Store
+.vscode/
+
+# --- Python bytecode / caches ---
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.cache/
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+ENV/
+
+# --- Jupyter ---
+.ipynb_checkpoints/
+
+# --- Packaging/build (only matters if you package; harmless to keep) ---
+build/
+dist/
+*.egg-info/
+.eggs/
+wheels/
+
+# --- Coverage (if you run coverage/pytest plugins) ---
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
+
+# --- Project outputs (generated, not versioned) ---
+results/
+data/
+
+# If you create nested benchmark outputs:
+**/benchmarks/**/results/

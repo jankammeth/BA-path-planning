@@ -1,1 +1,1 @@
-# Bachleor Thesis: path-planning
+# Large-Scale Collision-Free Path Planning
