@@ -166,7 +166,7 @@ class SCP:
 
         start_time = time.time()
 
-        self.precompute_optimization_matrices()
+        self._precompute_optimization_matrices()
         accelerations_flat = self._solve_initial_trajectory()
 
         init_guess_positions, _ = self._compute_positions_velocities(
@@ -211,7 +211,7 @@ class SCP:
 
         return self.trajectories
 
-    def precompute_optimization_matrices(self):
+    def _precompute_optimization_matrices(self):
         N, K, h = self.N, self.K, self.h
 
         # -------- jerk (sparse) --------
@@ -635,6 +635,32 @@ class SCP:
                         return False
         return True
 
+        # Put this helper inside class SCP (anywhere above visualize_trajectories)
+
+    def _quadrant_colors(self, center=(10.0, 10.0)):
+        """
+        Assign a color to each craft based on the quadrant of its initial position.
+        Quadrants (relative to `center`):
+        Q0: top-right, Q1: top-left, Q2: bottom-left, Q3: bottom-right
+        Returns: list of RGB tuples length N.
+        """
+        cx, cy = center
+        # Same palette as position_generator.quadrant_colors
+        palette = [(0.17, 0.28, 0.46), (0.54, 0.31, 0.56), (1.00, 0.39, 0.38), (1.00, 0.65, 0.00)]
+        init_pos = self.initial_positions.reshape(self.N, 2)
+        colors = []
+        for x, y in init_pos:
+            if x >= cx and y >= cy:
+                q = 0
+            elif x < cx and y >= cy:
+                q = 1
+            elif x < cx and y < cy:
+                q = 2
+            else:
+                q = 3
+            colors.append(palette[q])
+        return colors
+
     # Replace your existing visualize_trajectories with this version
     def visualize_trajectories(self, show_animation=False, save_path="trajectories.pdf"):
         """Visualize the generated 2D trajectories with same styling as position_generator."""
@@ -833,31 +859,6 @@ class SCP:
         plt.show()
 
         return fig, axes
-
-    # Put this helper inside class SCP (anywhere above visualize_trajectories)
-    def _quadrant_colors(self, center=(10.0, 10.0)):
-        """
-        Assign a color to each craft based on the quadrant of its initial position.
-        Quadrants (relative to `center`):
-        Q0: top-right, Q1: top-left, Q2: bottom-left, Q3: bottom-right
-        Returns: list of RGB tuples length N.
-        """
-        cx, cy = center
-        # Same palette as position_generator.quadrant_colors
-        palette = [(0.17, 0.28, 0.46), (0.54, 0.31, 0.56), (1.00, 0.39, 0.38), (1.00, 0.65, 0.00)]
-        init_pos = self.initial_positions.reshape(self.N, 2)
-        colors = []
-        for x, y in init_pos:
-            if x >= cx and y >= cy:
-                q = 0
-            elif x < cx and y >= cy:
-                q = 1
-            elif x < cx and y < cy:
-                q = 2
-            else:
-                q = 3
-            colors.append(palette[q])
-        return colors
 
 
 # Example usage to test the implementation
