@@ -41,6 +41,7 @@ results/
 data/
 plots/
 media/
+plots/
 
 # If you create nested benchmark outputs:
 **/benchmarks/**/results/
