@@ -165,7 +165,7 @@ def visualize_scenario(initial_positions, final_positions, min_distance=0.4):
     ax.set_title("Initial and Final Craft Positions")
 
     plt.tight_layout()
-    plt.savefig("position_generator.pdf", dpi=400)
+    plt.savefig("plots/position_generator.pdf", dpi=400)
     plt.show()
     return fig, ax
 
@@ -257,8 +257,6 @@ if __name__ == "__main__":
         # Generate initial and final positions
         initial_pos, final_pos = generate_positions(20, min_distance=1.0)
         print("Generated positions successfully!")
-        print(f"Initial positions:\n{initial_pos}")
-        print(f"Final positions:\n{final_pos}")
 
         # Analyze distances
         # 1) maximum straight distance any robot has to travel (lower bound)
