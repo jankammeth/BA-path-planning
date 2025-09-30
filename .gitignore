@@ -37,11 +37,9 @@ htmlcov/
 coverage.xml
 
 # --- Project outputs (generated, not versioned) ---
-results/
 data/
 plots/
 media/
-plots/
 
 # If you create nested benchmark outputs:
 **/benchmarks/**/results/
