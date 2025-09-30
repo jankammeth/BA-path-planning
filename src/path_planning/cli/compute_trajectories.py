@@ -75,7 +75,7 @@ def main():
         solver.generate_trajectories(max_iterations=15)
         end_time = time.time()
 
-        # Display results
+        # Print performance metrics
         print("\nTrajectory generation complete!")
         print(f"Total computation time: {end_time - start_time:.3f} seconds")
         print(f"Number of time steps: {solver.K}")

@@ -6,16 +6,10 @@ from pathlib import Path
 
 import numpy as np
 
-from ..scenarios.position_generator import (
-    generate_positions,
-)  # (initial_positions, final_positions)
-
-# Your modules
+from ..scenarios.position_generator import generate_positions
 from ..solvers.scp import SCP
 
-# from position_generator import print_distance_analysis  # optional debug
-
-
+# TODO: turn this into a proper .yaml
 # ---------------------------- Config ----------------------------
 CONFIG = {
     "Ns": [18, 20],  # robot counts to test
@@ -26,14 +20,14 @@ CONFIG = {
     "space_dims": [0, 0, 20, 20],  # [x_min, y_min, x_max, y_max]
     "max_iterations": 15,  # SCP iterations
     "rng_seed": None,  # set to int for reproducibility, or None
-    "results_dir": "results_new",  # output directory
+    "results_dir": "data/trial_xxx",  # output directory
 }
 # ---------------------------------------------------------------
 
 
 def run_single_trial(N, cfg, rng):
     """
-    Runs one SCP solve for N vehicles and returns a result dict.
+    Runs one SCP solve for N vehicles and returns a result dictionairy containing performance metrics.
     """
     solver = SCP(
         n_vehicles=N,
@@ -43,9 +37,8 @@ def run_single_trial(N, cfg, rng):
         space_dims=cfg["space_dims"],
     )
 
-    # Generate positions (TODO: mutate generator to accept rng if reproducibility is needed)
+    # Generate positions (TODO: mutate generator to accept seed for reproducibility)
     init_pos, final_pos = generate_positions(N, cfg["min_distance"])
-    # print_distance_analysis(init_pos, final_pos)
 
     solver.set_initial_states(init_pos)
     solver.set_final_states(final_pos)
@@ -69,7 +62,7 @@ def run_single_trial(N, cfg, rng):
         "K": getattr(solver, "K", None),
         "T": getattr(solver, "T", cfg["time_horizon"]),
         "h": getattr(solver, "h", cfg["time_step"]),
-        # You could also store the random seed for this trial if you set one
+        # TODO: store seed for reproducibility
     }
     return result
 
