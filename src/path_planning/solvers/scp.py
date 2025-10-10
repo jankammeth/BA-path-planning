@@ -101,7 +101,7 @@ class SCP:
         if velocities is None:
             velocities = np.zeros((self.N, 2))
 
-        # Conversion to flatt vector
+        # Conversion to flat vector
         self.initial_positions = positions.flatten()
         self.initial_velocities = velocities.flatten()
 

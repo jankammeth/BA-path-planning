@@ -165,7 +165,7 @@ def visualize_scenario(initial_positions, final_positions, min_distance=0.4):
     ax.set_title("Initial and Final Craft Positions")
 
     plt.tight_layout()
-    plt.savefig("plots/position_generator.pdf", dpi=400)
+    # plt.savefig("position_generator.pdf", dpi=400)
     plt.show()
     return fig, ax
 
@@ -248,8 +248,7 @@ def _is_valid_position(new_pos, existing_positions, min_dist):
     return all(np.linalg.norm(new_pos - pos) >= min_dist for pos in existing_positions)
 
 
-# TODO: rename position_generator to scenario generator for clarity
-if __name__ == "__main__":
+def main():
     """
     Example usage of the position generator.
     """
@@ -261,10 +260,15 @@ if __name__ == "__main__":
         # Analyze distances
         # 1) maximum straight distance any robot has to travel (lower bound)
         # 2) global minimum position between any two robots at initial of final time
-        distance_analysis = print_distance_analysis(initial_pos, final_pos)
+        print_distance_analysis(initial_pos, final_pos)
 
         # Visualize
         visualize_scenario(initial_pos, final_pos)
 
     except Exception as e:
         print(f"Error: {e}")
+
+
+# TODO: rename position_generator to scenario generator for clarity
+if __name__ == "__main__":
+    main()

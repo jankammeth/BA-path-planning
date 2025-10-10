@@ -2,7 +2,7 @@ import time
 
 import numpy as np
 
-from ..scenarios.position_generator import generate_positions, print_distance_analysis
+from ..scenarios.position_generator import generate_positions
 from ..solvers.scp import SCP
 
 
@@ -14,10 +14,10 @@ def main():
 
     # Configuration parameters
     n_vehicles = 10
-    time_horizon = 10  # [s]
+    time_horizon = 100  # [s]
     time_step = 0.2  # [s]
     min_distance = 0.8  # [m]
-    space_dims = [0, 0, 20, 20]  # [m]
+    space_dims = [0, 0, 200, 200]  # [m]
 
     print("Configuration:")
     print(f"  Number of vehicles: {n_vehicles}")
@@ -62,7 +62,7 @@ def main():
     initial_positions, final_positions = generate_positions(n_vehicles, min_distance)
     print(f"Successfully generated positions for {n_vehicles} vehicles")
 
-    print_distance_analysis(initial_positions, final_positions)
+    # print_distance_analysis(initial_positions, final_positions)
     # Set initial & final states
     solver.set_initial_states(initial_positions)
     solver.set_final_states(final_positions)
@@ -83,11 +83,13 @@ def main():
 
         # Visualize the trajectories
         print("\nVisualizing 2D trajectories...")
-        solver.visualize_trajectories(show_animation=True, save_path="wow_trajectories_2d.png")
+        solver.visualize_trajectories(show_animation=True)  # , save_path="wow_trajectories_2d.png")
 
         # Visualize time snapshots
         print("\nVisualizing time snapshots")
-        solver.visualize_time_snapshots(num_snapshots=5, save_path="wow_trajectories_snapshots.png")
+        solver.visualize_time_snapshots(
+            num_snapshots=5
+        )  # , save_path="wow_trajectories_snapshots.png")
 
         print("\nTrajectory files saved as:")
         print("- wow_trajectories_2d.png")
