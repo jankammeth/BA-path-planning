@@ -40,6 +40,8 @@ coverage.xml
 data/
 plots/
 media/
+/*.png
 
 # If you create nested benchmark outputs:
 **/benchmarks/**/results/
+/*.png
